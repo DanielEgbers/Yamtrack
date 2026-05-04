@@ -1,11 +1,13 @@
 from pathlib import Path
 
+import mistune
 from django import template
 from django.conf import settings
 from django.urls import reverse
 from django.utils import formats, timezone
 from django.utils.dateparse import parse_date
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 from unidecode import unidecode
 
 from app import config, helpers
@@ -523,3 +525,59 @@ def seconds_to_duration(seconds):
     if minutes >= 45:  # noqa: PLR2004
         return f"{hours + 1}h"
     return f"{hours}h" if minutes < 15 else f"{hours}h 30m"  # noqa: PLR2004
+
+
+_BLOCKED_SCHEMES = ("javascript:", "vbscript:")
+_BLOCKED_DATA = "data:"
+_ALLOWED_DATA_IMAGE_PREFIX = "data:image/"
+_BLOCKED_DATA_IMAGE_TYPES = ("data:image/svg",)
+
+
+def _is_blocked_url(url):
+    normalized = url.lower().lstrip()
+    if normalized.startswith(_BLOCKED_SCHEMES):
+        return True
+    if normalized.startswith(_BLOCKED_DATA):
+        return (
+                not normalized.startswith(_ALLOWED_DATA_IMAGE_PREFIX)
+            ) or (
+                normalized.startswith(_BLOCKED_DATA_IMAGE_TYPES)
+            )
+    return False
+
+
+class _SafeHTMLRenderer(mistune.HTMLRenderer):
+    """Block dangerous URL schemes in links and images.
+
+    data:image/ URLs are allowed except for SVG, which can embed scripts.
+    Note: HTML-entity-encoded schemes (e.g. &#106;avascript:) are not
+    decoded before the check. This is acceptable because notes are
+    user-authored and only visible to the author (no cross-user attack surface).
+    """
+
+    def link(self, text, url, title=None):
+        if url and _is_blocked_url(url):
+            url = "#"
+        html = super().link(text, url, title)
+        return html.replace("<a ", '<a target="_blank" rel="noopener noreferrer" ', 1)
+
+    def image(self, text, url, title=None):
+        if url and _is_blocked_url(url):
+            url = ""
+        return super().image(text, url, title)
+
+
+_plugins = [mistune.plugins.import_plugin(p) for p in ["strikethrough", "url", "table"]]
+_md = mistune.Markdown(
+    renderer=_SafeHTMLRenderer(escape=True),
+    inline=mistune.InlineParser(hard_wrap=True),
+    plugins=_plugins,
+)
+
+
+@register.filter
+def render_markdown(value):
+    """Render a Markdown string as safe HTML."""
+    if not value:
+        return ""
+    return mark_safe(_md(value))  # noqa: S308 -- safe: escape=True + blocked URL schemes

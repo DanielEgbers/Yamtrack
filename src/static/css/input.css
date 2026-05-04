@@ -1,4 +1,5 @@
 @import "tailwindcss" source("../../");
+@plugin "@tailwindcss/typography";
 
 @theme {
   --breakpoint-xs: 30rem;
@@ -43,6 +44,10 @@
 /* https://tailwindcss.com/docs/upgrade-guide#hover-styles-on-mobile */
 @custom-variant hover-tap (&:hover);
 @custom-variant parent-hover-tap (.hover-tap:hover &);
+
+.notes-content a {
+  @apply text-indigo-400 no-underline hover:text-indigo-300 transition-colors;
+}
 
 .toast-error {
   @apply bg-red-700/95 border-red-600;
