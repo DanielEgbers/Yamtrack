@@ -3,9 +3,11 @@ from unittest.mock import MagicMock, patch
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.safestring import SafeString
 
 from app.models import Item, MediaTypes, Sources
 from app.templatetags import app_tags
+from app.templatetags.app_tags import render_markdown
 
 
 class AppTagsTests(TestCase):
@@ -417,3 +419,164 @@ class AppTagsTests(TestCase):
         for seconds, expected in cases:
             with self.subTest(seconds=seconds):
                 self.assertEqual(app_tags.seconds_to_duration(seconds), expected)
+
+
+class RenderMarkdownSyntaxTests(TestCase):
+    """Test that Markdown syntax elements render to the expected HTML."""
+
+    def test_heading_h1(self):
+        """H1 syntax renders as <h1>."""
+        result = render_markdown("# H1")
+        self.assertIn("<h1>H1</h1>", result)
+
+    def test_heading_h2(self):
+        """H2 syntax renders as <h2>."""
+        result = render_markdown("## H2")
+        self.assertIn("<h2>H2</h2>", result)
+
+    def test_heading_h3(self):
+        """H3 syntax renders as <h3>."""
+        result = render_markdown("### H3")
+        self.assertIn("<h3>H3</h3>", result)
+
+    def test_bold(self):
+        """Bold syntax renders as <strong>."""
+        result = render_markdown("**bold**")
+        self.assertIn("<strong>bold</strong>", result)
+
+    def test_italic(self):
+        """Italic syntax renders as <em>."""
+        result = render_markdown("*italicized text*")
+        self.assertIn("<em>italicized text</em>", result)
+
+    def test_blockquote(self):
+        """Blockquote syntax renders as <blockquote>."""
+        result = render_markdown("> blockquote")
+        self.assertIn("<blockquote>", result)
+
+    def test_ordered_list(self):
+        """Ordered list syntax renders as <ol>/<li>."""
+        result = render_markdown("1. First item\n2. Second item")
+        self.assertIn("<ol>", result)
+        self.assertIn("<li>First item</li>", result)
+
+    def test_unordered_list(self):
+        """Unordered list syntax renders as <ul>/<li>."""
+        result = render_markdown("- item")
+        self.assertIn("<ul>", result)
+        self.assertIn("<li>item</li>", result)
+
+    def test_inline_code(self):
+        """Inline code syntax renders as <code>."""
+        result = render_markdown("`code`")
+        self.assertIn("<code>code</code>", result)
+
+    def test_horizontal_rule(self):
+        """Horizontal rule syntax renders as <hr>."""
+        result = render_markdown("---")
+        self.assertIn("<hr", result)
+
+    def test_link(self):
+        """Link syntax renders as <a>."""
+        result = render_markdown("[Markdown Guide](https://www.markdownguide.org)")
+        self.assertIn("<a", result)
+        self.assertIn('href="https://www.markdownguide.org"', result)
+
+    def test_image(self):
+        """Image syntax renders as <img>."""
+        url = "https://www.markdownguide.org/assets/images/tux.png"
+        result = render_markdown(f"![alt text]({url})")
+        self.assertIn("<img", result)
+        self.assertIn(f'src="{url}"', result)
+        self.assertIn('alt="alt text"', result)
+
+    def test_table(self):
+        """Table syntax renders as <table>."""
+        md = "| Syntax | Description |\n| --- | --- |\n| Header | Title |"
+        result = render_markdown(md)
+        self.assertIn("<table>", result)
+        self.assertIn("<th>", result)
+        self.assertIn("<td>", result)
+
+    def test_fenced_code_block(self):
+        """Fenced code block renders as <pre><code>."""
+        md = '```\n{\n  "key": "value"\n}\n```'
+        result = render_markdown(md)
+        self.assertIn("<pre>", result)
+        self.assertIn("<code>", result)
+
+    def test_strikethrough(self):
+        """Strikethrough syntax renders as <del>."""
+        result = render_markdown("~~The world is flat.~~")
+        self.assertIn("<del>", result)
+        self.assertIn("The world is flat.", result)
+
+
+class RenderMarkdownTechnicalTests(TestCase):
+    """Test technical behaviour of the render_markdown filter."""
+
+    def test_empty_string_returns_empty(self):
+        """Empty string returns empty string."""
+        self.assertEqual(render_markdown(""), "")
+
+    def test_none_returns_empty(self):
+        """None returns empty string."""
+        self.assertEqual(render_markdown(None), "")
+
+    def test_plain_text_renders(self):
+        """Plain text is included in output."""
+        result = render_markdown("hello world")
+        self.assertIn("hello world", result)
+
+    def test_returns_safe_string(self):
+        """Output is marked safe for Django template rendering."""
+        self.assertIsInstance(render_markdown("hello"), SafeString)
+
+    def test_raw_html_is_escaped(self):
+        """Raw HTML tags are escaped, not rendered."""
+        result = render_markdown("<script>alert(1)</script>")
+        self.assertNotIn("<script>", result)
+        self.assertIn("&lt;script&gt;", result)
+
+    def test_javascript_link_is_blocked(self):
+        """javascript: links are replaced with #."""
+        result = render_markdown("[x](javascript:alert(1))")
+        self.assertNotIn("javascript:", result)
+        self.assertIn('href="#"', result)
+
+    def test_vbscript_link_is_blocked(self):
+        """vbscript: links are replaced with #."""
+        result = render_markdown("[x](vbscript:msgbox(1))")
+        self.assertNotIn("vbscript:", result)
+        self.assertIn('href="#"', result)
+
+    def test_data_link_is_blocked(self):
+        """data: links are replaced with #."""
+        result = render_markdown("[x](data:text/html,<script>alert(1)</script>)")
+        self.assertNotIn("data:", result)
+
+    def test_data_image_is_blocked(self):
+        """Non-image data: URIs in images are blocked."""
+        result = render_markdown("![x](data:text/html,<script>alert(1)</script>)")
+        self.assertNotIn("data:", result)
+
+    def test_data_image_png_is_allowed(self):
+        """data:image/png URIs are allowed in images."""
+        result = render_markdown("![x](data:image/png;base64,abc)")
+        self.assertIn("data:image/png", result)
+
+    def test_data_image_svg_is_blocked(self):
+        """data:image/svg URIs are blocked due to potential script embedding."""
+        result = render_markdown("![x](data:image/svg+xml,<svg></svg>)")
+        self.assertNotIn("data:", result)
+
+    def test_links_open_in_new_tab(self):
+        """Links include target=_blank and rel=noopener noreferrer."""
+        result = render_markdown("[x](https://example.com)")
+        self.assertIn('target="_blank"', result)
+        self.assertIn('rel="noopener noreferrer"', result)
+
+    def test_hard_wrap(self):
+        """Single newlines within a paragraph render as <br>."""
+        result = render_markdown("line one\nline two")
+        self.assertIn("<br", result)
